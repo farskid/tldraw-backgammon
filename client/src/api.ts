@@ -27,12 +27,32 @@ export function resetGame(roomId: string, playerId: string) {
 	return post(`/api/rooms/${roomId}/reset`, { playerId })
 }
 
+/**
+ * UUID v4 that also works on insecure origins (e.g. http://192.168.x.x):
+ * crypto.randomUUID is secure-context-only, but getRandomValues is not.
+ */
+function generateUuid(): string {
+	if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+	if (typeof crypto.getRandomValues === 'function') {
+		const bytes = crypto.getRandomValues(new Uint8Array(16))
+		bytes[6] = (bytes[6] & 0x0f) | 0x40
+		bytes[8] = (bytes[8] & 0x3f) | 0x80
+		const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+		return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+	}
+	// last-resort fallback for very old browsers
+	return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+		const r = (Math.random() * 16) | 0
+		return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
+	})
+}
+
 export function getPlayerId(): string {
 	// sessionStorage is per-tab, so two tabs in the same browser get different
 	// player ids — handy for local testing.
 	let id = sessionStorage.getItem('bg-player-id')
 	if (!id) {
-		id = crypto.randomUUID()
+		id = generateUuid()
 		sessionStorage.setItem('bg-player-id', id)
 	}
 	return id

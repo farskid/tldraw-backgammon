@@ -27,6 +27,10 @@ npm run build
 npm start -w server     # serves the built client + sync + API on http://localhost:5858
 ```
 
+### Playing from a phone on your LAN
+
+Run the single-process mode above and open `http://<your-LAN-IP>:5858/?room=myroom` on the phone. Plain HTTP over a LAN IP is not a "secure context", so the client avoids secure-context-only browser APIs (`crypto.randomUUID`, `navigator.clipboard`) and falls back to `crypto.getRandomValues` / `execCommand` — no HTTPS needed. An HTTPS tunnel (e.g. ngrok, cloudflared) still works if you prefer one.
+
 ### Simulate a full game (rules smoke test)
 
 With the server running:

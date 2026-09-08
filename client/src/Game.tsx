@@ -28,6 +28,22 @@ import { Seat, getPlayerId, joinRoom, resetGame, rollDice, sendMove } from './ap
 
 const STATE_SHAPE_ID = createShapeId('state')
 
+/** navigator.clipboard is secure-context-only; fall back to execCommand on plain http://LAN_IP. */
+function copyText(text: string) {
+	if (navigator.clipboard) {
+		navigator.clipboard.writeText(text).catch(() => {})
+		return
+	}
+	const el = document.createElement('textarea')
+	el.value = text
+	el.style.position = 'fixed'
+	el.style.opacity = '0'
+	document.body.appendChild(el)
+	el.select()
+	document.execCommand('copy')
+	el.remove()
+}
+
 // No images/videos in this app; the board is drawn entirely by the server.
 const noAssets: TLAssetStore = {
 	upload: async () => {
@@ -247,7 +263,7 @@ function GameOverlay({
 					<span>Room {roomId}</span>
 					<button
 						className="hud-btn hud-btn-small"
-						onClick={() => navigator.clipboard.writeText(location.href)}
+						onClick={() => copyText(location.href)}
 					>
 						Copy link
 					</button>

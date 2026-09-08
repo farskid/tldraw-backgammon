@@ -1,5 +1,7 @@
 import express from 'express'
+import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
+import path from 'node:path'
 import { WebSocketServer } from 'ws'
 import { getOrCreateRoom } from './rooms'
 
@@ -50,6 +52,15 @@ app.post('/api/rooms/:roomId/reset', (req, res) => {
 app.get('/api/rooms/:roomId/state', (req, res) => {
 	res.json(getOrCreateRoom(req.params.roomId).game)
 })
+
+// If the client has been built, serve it too (single-process "production" mode).
+const distDir = path.resolve(import.meta.dirname, '../../client/dist')
+if (existsSync(distDir)) {
+	app.use(express.static(distDir))
+	app.get(/^\/(?!api\/|connect\/).*/, (_req, res) => {
+		res.sendFile(path.join(distDir, 'index.html'))
+	})
+}
 
 const server = createServer(app)
 const wss = new WebSocketServer({ noServer: true })

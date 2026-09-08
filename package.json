@@ -1,0 +1,29 @@
+{
+  "name": "tldraw-backgammon",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w client && npm run typecheck -w server && npm run typecheck -w shared",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w client",
+    "start": "npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "overrides": {
+    "@tldraw/tlschema": "5.4.0",
+    "@tldraw/store": "5.4.0",
+    "@tldraw/validate": "5.4.0",
+    "@tldraw/utils": "5.4.0",
+    "@tldraw/state": "5.4.0",
+    "@tldraw/state-react": "5.4.0",
+    "@tldraw/editor": "5.4.0",
+    "@tldraw/sync-core": "5.4.0"
+  }
+}

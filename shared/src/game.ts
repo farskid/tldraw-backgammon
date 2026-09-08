@@ -10,15 +10,25 @@
  */
 
 export type Color = 'w' | 'b'
-export type Phase = 'waiting' | 'rolling' | 'moving' | 'gameover'
+/** 'stuck' = rolled but has no legal move; the server passes the turn after a short pause */
+export type Phase = 'waiting' | 'rolling' | 'moving' | 'stuck' | 'gameover'
 
 export interface PointState {
 	color: Color
 	count: number
 }
 
+/** A provisional move made this turn, with enough info to revert it. */
+export interface StagedMove {
+	from: MoveFrom
+	to: MoveTo
+	die: number
+	/** whether this move hit an opponent blot (sent it to the bar) */
+	hit: boolean
+}
+
 export interface GameState {
-	/** 24 points; null = empty */
+	/** 24 points; null = empty. Reflects the staged (provisional) position. */
 	points: (PointState | null)[]
 	/** checkers on the bar */
 	bar: Record<Color, number>
@@ -29,6 +39,10 @@ export interface GameState {
 	dice: number[]
 	/** the dice as rolled, for display */
 	lastRoll: [number, number] | null
+	/** provisional moves made this turn, awaiting OK / undo */
+	staged: StagedMove[]
+	/** epoch ms when the current turn expires (server-set); null = no clock running */
+	turnDeadline: number | null
 	phase: Phase
 	winner: Color | null
 	/** human-readable last event */
@@ -73,6 +87,8 @@ export function initialGameState(): GameState {
 		turn: 'w',
 		dice: [],
 		lastRoll: null,
+		staged: [],
+		turnDeadline: null,
 		phase: 'waiting',
 		winner: null,
 		message: 'Waiting for a second player to join…',
@@ -96,10 +112,11 @@ export function startGame(state: GameState, rng: Rng): void {
 	state.turn = dw > db ? 'w' : 'b'
 	state.lastRoll = [dw, db]
 	state.dice = [dw, db]
+	state.staged = []
 	state.phase = 'moving'
 	state.winner = null
 	state.message = `Opening roll ${dw}-${db} — ${COLOR_NAME[state.turn]} starts.`
-	skipTurnIfStuck(state)
+	markStuckIfNoMoves(state)
 }
 
 export function rollDice(state: GameState, rng: Rng): void {
@@ -109,7 +126,19 @@ export function rollDice(state: GameState, rng: Rng): void {
 	state.dice = a === b ? [a, a, a, a] : [a, b]
 	state.phase = 'moving'
 	state.message = `${COLOR_NAME[state.turn]} rolled ${a}-${b}.`
-	skipTurnIfStuck(state)
+	markStuckIfNoMoves(state)
+}
+
+/**
+ * If the roll leaves the player with no legal move at all, enter the 'stuck'
+ * phase: the dice stay visible and the server passes the turn after a short,
+ * server-driven pause so both players can see what happened.
+ */
+function markStuckIfNoMoves(state: GameState): void {
+	if (state.phase === 'moving' && legalMoves(state).length === 0) {
+		state.phase = 'stuck'
+		state.message += ` No legal moves!`
+	}
 }
 
 function canLand(state: GameState, color: Color, idx: number): boolean {
@@ -202,10 +231,12 @@ export interface MoveResult {
 }
 
 /**
- * Validate and apply a from→to move for the player to move.
- * The die is chosen by the server: the smallest remaining die that legalizes the move.
+ * Validate and stage a from→to move for the player to move. The move is
+ * applied to the board immediately (so both players can see it) but stays
+ * provisional until confirmTurn commits it. The die is chosen by the server:
+ * the smallest remaining die that legalizes the move.
  */
-export function applyMove(state: GameState, from: MoveFrom, to: MoveTo): MoveResult {
+export function stageMove(state: GameState, from: MoveFrom, to: MoveTo): MoveResult {
 	if (state.phase !== 'moving') {
 		return { ok: false, error: 'Not in a moving phase (roll first).' }
 	}
@@ -230,21 +261,16 @@ export function applyMove(state: GameState, from: MoveFrom, to: MoveTo): MoveRes
 	}
 
 	// place the checker
+	let hit = false
 	if (move.to === 'off') {
 		state.off[color]++
 		state.message = `${COLOR_NAME[color]} bears off.`
-		if (state.off[color] === 15) {
-			state.phase = 'gameover'
-			state.winner = color
-			state.dice = []
-			state.message = `${COLOR_NAME[color]} wins!`
-			return { ok: true }
-		}
 	} else {
 		const t = move.to as number
 		const p = state.points[t]
 		if (p && p.color !== color) {
 			// hit a blot
+			hit = true
 			state.bar[p.color]++
 			state.points[t] = { color, count: 1 }
 			state.message = `${COLOR_NAME[color]} hits a blot!`
@@ -257,25 +283,104 @@ export function applyMove(state: GameState, from: MoveFrom, to: MoveTo): MoveRes
 		}
 	}
 
+	state.staged.push({ from: move.from, to: move.to, die: move.die, hit })
+
 	if (state.dice.length === 0) {
-		endTurn(state)
-	} else {
-		skipTurnIfStuck(state)
+		state.message += ' Press OK to end the turn.'
+	} else if (legalMoves(state).length === 0) {
+		state.message += ' No more moves — press OK.'
 	}
 	return { ok: true }
+}
+
+/** Revert the most recently staged move (board + dice). */
+function revertLastStaged(state: GameState): void {
+	const move = state.staged.pop()
+	if (!move) return
+	const color = state.turn
+
+	// take the checker back off its destination
+	if (move.to === 'off') {
+		state.off[color]--
+	} else {
+		const t = move.to as number
+		const p = state.points[t]!
+		p.count--
+		if (p.count === 0) state.points[t] = null
+		if (move.hit) {
+			// restore the opponent blot from the bar
+			state.bar[OPPONENT[color]]--
+			state.points[t] = { color: OPPONENT[color], count: 1 }
+		}
+	}
+
+	// put it back where it came from
+	if (move.from === 'bar') {
+		state.bar[color]++
+	} else {
+		const f = move.from as number
+		const p = state.points[f]
+		if (p) p.count++
+		else state.points[f] = { color, count: 1 }
+	}
+
+	// give the die back
+	state.dice.push(move.die)
+}
+
+/** Undo the last staged move of the current turn. */
+export function undoStagedMove(state: GameState): MoveResult {
+	if (state.phase !== 'moving') return { ok: false, error: 'Nothing to undo.' }
+	if (state.staged.length === 0) return { ok: false, error: 'No staged moves to undo.' }
+	revertLastStaged(state)
+	state.message = `${COLOR_NAME[state.turn]} undoes a move.`
+	return { ok: true }
+}
+
+/**
+ * Commit the staged moves and pass the turn. Rejected while a legal move can
+ * still be made with the remaining dice.
+ */
+export function confirmTurn(state: GameState): MoveResult {
+	if (state.phase !== 'moving') {
+		return { ok: false, error: 'Roll before confirming.' }
+	}
+	if (legalMoves(state).length > 0) {
+		return { ok: false, error: 'You must play your remaining dice.' }
+	}
+	const color = state.turn
+	state.staged = []
+	if (state.off[color] === 15) {
+		state.phase = 'gameover'
+		state.winner = color
+		state.dice = []
+		state.message = `${COLOR_NAME[color]} wins!`
+		return { ok: true }
+	}
+	state.message = `${COLOR_NAME[color]} ends the turn.`
+	endTurn(state)
+	return { ok: true }
+}
+
+/**
+ * Forfeit the rest of the turn: discard any unconfirmed staged moves and pass
+ * to the opponent. Used by the server for turn-clock expiry and for the pause
+ * after a roll with no legal moves.
+ */
+export function passTurn(state: GameState, reason: 'timeout' | 'noMoves'): void {
+	if (state.phase !== 'rolling' && state.phase !== 'moving' && state.phase !== 'stuck') return
+	while (state.staged.length > 0) revertLastStaged(state)
+	state.message =
+		reason === 'timeout'
+			? `${COLOR_NAME[state.turn]} ran out of time.`
+			: `${COLOR_NAME[state.turn]} cannot move.`
+	endTurn(state)
 }
 
 function endTurn(state: GameState): void {
 	state.turn = OPPONENT[state.turn]
 	state.dice = []
+	state.staged = []
 	state.phase = 'rolling'
 	state.message += ` ${COLOR_NAME[state.turn]} to roll.`
-}
-
-/** If the player to move has dice but no legal move, forfeit the rest of the turn. */
-function skipTurnIfStuck(state: GameState): void {
-	if (state.phase === 'moving' && legalMoves(state).length === 0) {
-		state.message += ` ${COLOR_NAME[state.turn]} has no legal moves.`
-		endTurn(state)
-	}
 }

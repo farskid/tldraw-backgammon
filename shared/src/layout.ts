@@ -1,5 +1,6 @@
 import { COLOR_NAME, Color, GameState, MoveFrom, MoveTo } from './game'
 import { BgShapeProps } from './shape'
+import { CheckerStacks } from './stacks'
 
 /**
  * Board layout: converts a GameState into a flat list of shape specs.
@@ -108,11 +109,18 @@ function props(partial: Partial<BgShapeProps>): BgShapeProps {
 	}
 }
 
+/** Height of a flattened borne-off chip in the tray */
+export const OFF_CHIP_H = 16
+
 /**
  * Build the full list of shapes for the current game state.
  * Order in the list is z-order (first = back).
+ *
+ * `stacks` assigns a stable identity to every physical checker (see
+ * stacks.ts); each checker becomes a shape with a stable id so that position
+ * changes can be animated with a CSS transition on the client.
  */
-export function buildBoardSpecs(state: GameState): BoardShapeSpec[] {
+export function buildBoardSpecs(state: GameState, stacks: CheckerStacks): BoardShapeSpec[] {
 	const specs: BoardShapeSpec[] = []
 
 	// Playing surface
@@ -173,57 +181,71 @@ export function buildBoardSpecs(state: GameState): BoardShapeSpec[] {
 		})
 	}
 
-	// Checkers on points (display at most 5 per point, with a count on the last one)
+	const checkerProps = (color: Color, w: number, h: number) =>
+		props({
+			kind: 'checker',
+			w,
+			h,
+			fill: CHECKER_COLORS[color].fill,
+			stroke: CHECKER_COLORS[color].stroke,
+		})
+
+	// Checkers on points; stacks compress when more than 5 pile up
 	for (let idx = 0; idx < 24; idx++) {
-		const p = state.points[idx]
-		if (!p) continue
+		const ids = stacks[`p${idx}`] ?? []
+		if (ids.length === 0) continue
 		const top = isTopRow(idx)
 		const cx = colX(pointCol(idx)) + (COL_W - CHECKER_D) / 2
-		const shown = Math.min(p.count, 5)
-		for (let k = 0; k < shown; k++) {
-			const cy = top ? PAD + k * CHECKER_D : BOARD_H - PAD - (k + 1) * CHECKER_D
+		const spacing = ids.length <= 5 ? CHECKER_D : (POINT_H - CHECKER_D) / (ids.length - 1)
+		ids.forEach((cid, k) => {
+			const cy = top ? PAD + k * spacing : BOARD_H - PAD - CHECKER_D - k * spacing
 			specs.push({
-				id: `checker-${idx}-${k}`,
+				id: `checker-${cid}`,
 				x: cx,
 				y: cy,
-				props: props({
-					kind: 'checker',
-					w: CHECKER_D,
-					h: CHECKER_D,
-					fill: CHECKER_COLORS[p.color].fill,
-					stroke: CHECKER_COLORS[p.color].stroke,
-					label: k === shown - 1 && p.count > 5 ? String(p.count) : '',
-				}),
+				props: checkerProps(cid[0] as Color, CHECKER_D, CHECKER_D),
 				meta: { click: `point:${idx}` },
 			})
-		}
+		})
 	}
 
 	// Checkers on the bar (White below center, Black above)
 	for (const color of ['w', 'b'] as Color[]) {
-		const n = state.bar[color]
-		const shown = Math.min(n, 4)
+		const ids = stacks[`bar-${color}`] ?? []
+		if (ids.length === 0) continue
 		const bx = BAR_X + (BAR_W - CHECKER_D) / 2
-		for (let k = 0; k < shown; k++) {
+		const span = BOARD_H / 2 - 12 - PAD - CHECKER_D
+		const spacing = ids.length <= 1 ? 0 : Math.min(CHECKER_D, span / (ids.length - 1))
+		ids.forEach((cid, k) => {
 			const by =
 				color === 'w'
-					? BOARD_H / 2 + 12 + k * CHECKER_D
-					: BOARD_H / 2 - 12 - (k + 1) * CHECKER_D
+					? BOARD_H / 2 + 12 + k * spacing
+					: BOARD_H / 2 - 12 - CHECKER_D - k * spacing
 			specs.push({
-				id: `barchecker-${color}-${k}`,
+				id: `checker-${cid}`,
 				x: bx,
 				y: by,
-				props: props({
-					kind: 'checker',
-					w: CHECKER_D,
-					h: CHECKER_D,
-					fill: CHECKER_COLORS[color].fill,
-					stroke: CHECKER_COLORS[color].stroke,
-					label: k === shown - 1 && n > 4 ? String(n) : '',
-				}),
+				props: checkerProps(color, CHECKER_D, CHECKER_D),
 				meta: { click: 'bar' },
 			})
-		}
+		})
+	}
+
+	// Borne-off checkers: flattened chips piling up in the tray. Same shape id
+	// as on the board, so bearing off animates the checker into the tray.
+	for (const color of ['w', 'b'] as Color[]) {
+		const ids = stacks[`off-${color}`] ?? []
+		const trayX = BOARD_W + TRAY_GAP + (TRAY_W - CHECKER_D) / 2
+		const trayY = color === 'b' ? PAD : BOARD_H - PAD - POINT_H
+		ids.forEach((cid, k) => {
+			specs.push({
+				id: `checker-${cid}`,
+				x: trayX,
+				y: trayY + POINT_H - 12 - OFF_CHIP_H - k * (OFF_CHIP_H - 1),
+				props: checkerProps(color, CHECKER_D, OFF_CHIP_H),
+				meta: { click: 'off' },
+			})
+		})
 	}
 
 	// Remaining dice, centered in the right half of the mid gap

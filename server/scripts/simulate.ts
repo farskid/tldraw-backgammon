@@ -1,7 +1,11 @@
 /**
  * Plays a full random game against the HTTP API to exercise the rules engine
- * end-to-end (turn order, hits, bar entry, bearing off, game over).
- * Usage: npx tsx server/scripts/simulate.ts [roomId]
+ * end-to-end (turn order, staging + confirm, hits, bar entry, bearing off,
+ * the no-legal-moves pause, and game over).
+ *
+ * Run the server with fast timers for quick simulations:
+ *   STUCK_MS=100 npm start -w server
+ * Then: npx tsx server/scripts/simulate.ts [roomId]
  */
 import { GameState, legalMoves } from '@backgammon/shared'
 
@@ -23,6 +27,8 @@ async function getState(): Promise<GameState> {
 	return res.json()
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 async function main() {
 	console.log(`room: ${room}`)
 	for (const color of ['w', 'b']) {
@@ -33,16 +39,27 @@ async function main() {
 	let hits = 0
 	let barEntries = 0
 	let bearOffs = 0
-	for (let step = 0; step < 3000; step++) {
+	let stuckTurns = 0
+	let undos = 0
+	const deadline = Date.now() + 5 * 60_000
+	while (Date.now() < deadline) {
 		const state = await getState()
 		if (state.phase === 'gameover') {
-			console.log(`GAME OVER after ${step} steps: ${state.message}`)
-			console.log(`hits=${hits} barEntries=${barEntries} bearOffs=${bearOffs}`)
+			console.log(`GAME OVER: ${state.message}`)
+			console.log(
+				`hits=${hits} barEntries=${barEntries} bearOffs=${bearOffs} stuckTurns=${stuckTurns} undos=${undos}`
+			)
 			console.log(`off: w=${state.off.w} b=${state.off.b}`)
 			if (state.off[state.winner!] !== 15) throw new Error('winner does not have 15 off')
 			return
 		}
 		const playerId = players[state.turn]
+		if (state.phase === 'stuck') {
+			// server passes the turn after the pause
+			stuckTurns++
+			await sleep(300)
+			continue
+		}
 		if (state.phase === 'rolling') {
 			const r = await post(`/api/rooms/${room}/roll`, { playerId })
 			if (!r.body.ok) throw new Error(`roll failed: ${JSON.stringify(r.body)}`)
@@ -50,7 +67,23 @@ async function main() {
 		}
 		if (state.phase === 'moving') {
 			const moves = legalMoves(state)
-			if (moves.length === 0) throw new Error('phase=moving but engine sees no legal moves')
+			if (moves.length === 0) {
+				const r = await post(`/api/rooms/${room}/confirm`, { playerId })
+				if (!r.body.ok) throw new Error(`confirm failed: ${JSON.stringify(r.body)}`)
+				continue
+			}
+			// occasionally exercise undo
+			if (state.staged.length > 0 && Math.random() < 0.05) {
+				const r = await post(`/api/rooms/${room}/undo`, { playerId })
+				if (!r.body.ok) throw new Error(`undo failed: ${JSON.stringify(r.body)}`)
+				undos++
+				continue
+			}
+			// confirm-too-early must be rejected while moves remain
+			if (Math.random() < 0.03) {
+				const r = await post(`/api/rooms/${room}/confirm`, { playerId })
+				if (r.body.ok) throw new Error('confirm accepted despite remaining legal moves')
+			}
 			const move = moves[Math.floor(Math.random() * moves.length)]
 			if (move.from === 'bar') barEntries++
 			if (move.to === 'off') bearOffs++
@@ -73,7 +106,7 @@ async function main() {
 		}
 		throw new Error(`unexpected phase ${state.phase}`)
 	}
-	throw new Error('game did not finish within step limit')
+	throw new Error('game did not finish within the time limit')
 }
 
 main().catch((err) => {

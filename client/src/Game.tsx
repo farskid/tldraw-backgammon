@@ -24,7 +24,16 @@ import {
 	useValue,
 } from 'tldraw'
 import { BgShapeUtil } from './BgShapeUtil'
-import { Seat, getPlayerId, joinRoom, resetGame, rollDice, sendMove } from './api'
+import {
+	Seat,
+	confirmTurn,
+	getPlayerId,
+	joinRoom,
+	resetGame,
+	rollDice,
+	sendMove,
+	undoMove,
+} from './api'
 
 const STATE_SHAPE_ID = createShapeId('state')
 
@@ -269,22 +278,28 @@ function GameOverlay({
 					</button>
 				</div>
 				<div className="hud-row">
-					{seat === null
-						? 'Joining…'
-						: seat === 'spectator'
-							? 'You are spectating (seats are full)'
-							: `You play ${COLOR_NAME[seat]}`}
+					{seat === null ? (
+						'Joining…'
+					) : seat === 'spectator' ? (
+						'You are spectating (seats are full)'
+					) : (
+						<>
+							<span className={`chip chip-${seat}`} aria-label={COLOR_NAME[seat]} />
+							<b>You</b>
+						</>
+					)}
 				</div>
 				<div className="hud-row hud-status">{state.message}</div>
 				{state.phase !== 'waiting' && state.phase !== 'gameover' && (
 					<div className="hud-row">
-						Turn: <b>{COLOR_NAME[state.turn]}</b>
+						Turn: <span className={`chip chip-${state.turn}`} />
+						<b>{COLOR_NAME[state.turn]}</b>
+						{state.turnDeadline !== null && <Countdown deadline={state.turnDeadline} />}
 						{state.lastRoll && (
 							<span>
-								&nbsp;· Roll: {state.lastRoll[0]}-{state.lastRoll[1]}
+								· 🎲 {state.lastRoll[0]}-{state.lastRoll[1]}
 							</span>
 						)}
-						{state.dice.length > 0 && <span>&nbsp;· Left: {state.dice.join(', ')}</span>}
 					</div>
 				)}
 				<div className="hud-row">
@@ -309,11 +324,51 @@ function GameOverlay({
 					</button>
 				)}
 				{myTurn && state.phase === 'moving' && (
-					<div className="hud-hint">
-						{selected === null
-							? 'Click one of your highlighted checkers…'
-							: 'Now click a highlighted destination.'}
-					</div>
+					<>
+						<div className="hud-row">
+							<button
+								className="hud-btn hud-btn-secondary"
+								disabled={busy || state.staged.length === 0}
+								onClick={() => {
+									setBusy(true)
+									undoMove(roomId, playerId)
+										.then((res) => {
+											if (!res.ok) flashError(res.error ?? 'Undo rejected.')
+										})
+										.catch(() => flashError('Network error.'))
+										.finally(() => setBusy(false))
+								}}
+							>
+								↩ Undo
+							</button>
+							<button
+								className="hud-btn"
+								disabled={busy || moves.length > 0}
+								title={moves.length > 0 ? 'Play your remaining dice first' : 'End your turn'}
+								onClick={() => {
+									setBusy(true)
+									confirmTurn(roomId, playerId)
+										.then((res) => {
+											if (!res.ok) flashError(res.error ?? 'Confirm rejected.')
+										})
+										.catch(() => flashError('Network error.'))
+										.finally(() => setBusy(false))
+								}}
+							>
+								✓ OK
+							</button>
+						</div>
+						<div className="hud-hint">
+							{moves.length === 0
+								? 'No moves left — press OK to end your turn.'
+								: selected === null
+									? 'Click one of your highlighted checkers…'
+									: 'Now click a highlighted destination.'}
+						</div>
+					</>
+				)}
+				{state.phase === 'stuck' && (
+					<div className="hud-hint">No legal moves — passing the turn…</div>
 				)}
 				{state.phase === 'gameover' && seat !== 'spectator' && seat !== null && (
 					<button
@@ -334,4 +389,18 @@ function GameOverlay({
 			{error && <div className="toast">{error}</div>}
 		</>
 	)
+}
+
+/**
+ * Displays the remaining turn time. The deadline is a server timestamp — the
+ * server ends the turn on expiry regardless of what this shows.
+ */
+function Countdown({ deadline }: { deadline: number }) {
+	const [now, setNow] = useState(() => Date.now())
+	useEffect(() => {
+		const t = window.setInterval(() => setNow(Date.now()), 250)
+		return () => window.clearInterval(t)
+	}, [])
+	const secs = Math.max(0, Math.ceil((deadline - now) / 1000))
+	return <span className={secs <= 10 ? 'clock clock-low' : 'clock'}>⏱ {secs}s</span>
 }

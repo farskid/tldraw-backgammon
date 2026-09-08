@@ -118,6 +118,46 @@ body,
 	padding: 4px 8px;
 	font-size: 12px;
 }
+.hud-btn-secondary {
+	background: #4a5a52;
+	color: #e8e0d0;
+}
+.hud-btn-secondary:hover:not(:disabled) {
+	background: #5b6e64;
+}
+
+/* seat / turn chips */
+.chip {
+	display: inline-block;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	vertical-align: middle;
+	box-shadow: inset 0 -2px 3px rgba(0, 0, 0, 0.25);
+}
+.chip-w {
+	background: #f3ead8;
+	border: 2px solid #8a7a5c;
+}
+.chip-b {
+	background: #35322e;
+	border: 2px solid #14120f;
+}
+
+/* turn clock */
+.clock {
+	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+}
+.clock-low {
+	color: #ff6a4d;
+}
+
+/* Animate checker movement: board shapes have stable ids, so a move updates
+   the transform of an existing element and this transition tweens it. */
+.tl-shape[data-shape-type='bg'] {
+	transition: transform 300ms ease;
+}
 
 /* move highlights */
 .highlight-layer {

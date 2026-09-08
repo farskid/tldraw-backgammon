@@ -1,15 +1,20 @@
 import {
 	BG_SHAPE_TYPE,
+	CheckerStacks,
 	Color,
 	GameState,
 	MoveFrom,
 	MoveTo,
-	applyMove,
 	bgShapeProps,
 	buildBoardSpecs,
+	confirmTurn,
 	initialGameState,
+	passTurn,
 	rollDice,
+	stageMove,
 	startGame,
+	undoStagedMove,
+	updateStacks,
 } from '@backgammon/shared'
 import { InMemorySyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 import {
@@ -41,6 +46,11 @@ const schema = createTLSchema({
 /** Server RNG — dice are never rolled client-side. */
 const rng = () => crypto.randomInt(0, 2 ** 32) / 2 ** 32
 
+/** Whole-turn clock (roll + staged moves + OK) */
+const TURN_MS = Number(process.env.TURN_MS ?? 30_000)
+/** Pause after a roll with no legal moves, so both players can read the dice */
+const STUCK_MS = Number(process.env.STUCK_MS ?? 2_500)
+
 export class GameRoom {
 	readonly storage = new InMemorySyncStorage<TLRecord>()
 	readonly room: TLSocketRoom<TLRecord, void>
@@ -49,6 +59,12 @@ export class GameRoom {
 	private seats: Record<Color, string | null> = { w: null, b: null }
 	/** sessionId → playerId for connected sockets */
 	private sessions = new Map<string, string>()
+	/** stable checker-id assignment, kept between renders for animation */
+	private stacks: CheckerStacks = {}
+	/** pending turn-clock or stuck-pause timer */
+	private timer: NodeJS.Timeout | null = null
+	/** invalidates stale timers whenever the clock is re-armed */
+	private timerSerial = 0
 
 	constructor(readonly id: string) {
 		this.room = new TLSocketRoom<TLRecord, void>({
@@ -102,6 +118,7 @@ export class GameRoom {
 				this.game.seats[color] = true
 				if (this.game.phase === 'waiting' && this.seats.w && this.seats.b) {
 					startGame(this.game, rng)
+					this.armTimers(true)
 				} else if (this.game.phase === 'waiting') {
 					this.game.message = 'Waiting for a second player to join…'
 				}
@@ -112,26 +129,93 @@ export class GameRoom {
 		return 'spectator'
 	}
 
+	/**
+	 * (Re-)arm the server-side clock for the current phase. `newTurn` starts a
+	 * fresh 30s deadline; otherwise the existing deadline keeps running. The
+	 * clock is authoritative: expiry discards staged moves and passes the turn
+	 * regardless of what clients display.
+	 */
+	private armTimers(newTurn: boolean): void {
+		if (this.timer) clearTimeout(this.timer)
+		this.timer = null
+		const serial = ++this.timerSerial
+		const g = this.game
+
+		if (g.phase === 'stuck') {
+			g.turnDeadline = null
+			this.timer = setTimeout(() => {
+				if (serial !== this.timerSerial) return
+				passTurn(g, 'noMoves')
+				this.armTimers(true)
+				this.syncBoard()
+			}, STUCK_MS)
+			return
+		}
+
+		if (g.phase !== 'rolling' && g.phase !== 'moving') {
+			g.turnDeadline = null
+			return
+		}
+
+		if (newTurn || g.turnDeadline === null) {
+			g.turnDeadline = Date.now() + TURN_MS
+		}
+		const delay = Math.max(0, g.turnDeadline - Date.now())
+		this.timer = setTimeout(() => {
+			if (serial !== this.timerSerial) return
+			passTurn(g, 'timeout')
+			this.armTimers(true)
+			this.syncBoard()
+		}, delay)
+	}
+
 	registerSession(sessionId: string, playerId: string): void {
 		this.sessions.set(sessionId, playerId)
 	}
 
-	roll(playerId: string): ActionResult {
+	/** Guard shared by all play actions */
+	private turnCheck(playerId: string): ActionResult & { seat?: Color } {
 		const seat = this.seatOf(playerId)
 		if (seat === 'spectator') return { ok: false, error: 'Spectators cannot play.' }
-		if (this.game.phase !== 'rolling') return { ok: false, error: 'Not time to roll.' }
 		if (this.game.turn !== seat) return { ok: false, error: 'Not your turn.' }
+		return { ok: true, seat }
+	}
+
+	roll(playerId: string): ActionResult {
+		const check = this.turnCheck(playerId)
+		if (!check.ok) return check
+		if (this.game.phase !== 'rolling') return { ok: false, error: 'Not time to roll.' }
 		rollDice(this.game, rng)
+		// entering 'stuck' arms the pass-turn pause; otherwise the turn clock keeps running
+		this.armTimers(false)
 		this.syncBoard()
 		return { ok: true }
 	}
 
-	move(playerId: string, from: MoveFrom, to: MoveTo): ActionResult {
-		const seat = this.seatOf(playerId)
-		if (seat === 'spectator') return { ok: false, error: 'Spectators cannot play.' }
-		if (this.game.turn !== seat) return { ok: false, error: 'Not your turn.' }
-		const result = applyMove(this.game, from, to)
+	stage(playerId: string, from: MoveFrom, to: MoveTo): ActionResult {
+		const check = this.turnCheck(playerId)
+		if (!check.ok) return check
+		const result = stageMove(this.game, from, to)
 		if (result.ok) this.syncBoard()
+		return result
+	}
+
+	undo(playerId: string): ActionResult {
+		const check = this.turnCheck(playerId)
+		if (!check.ok) return check
+		const result = undoStagedMove(this.game)
+		if (result.ok) this.syncBoard()
+		return result
+	}
+
+	confirm(playerId: string): ActionResult {
+		const check = this.turnCheck(playerId)
+		if (!check.ok) return check
+		const result = confirmTurn(this.game)
+		if (result.ok) {
+			this.armTimers(true)
+			this.syncBoard()
+		}
 		return result
 	}
 
@@ -143,6 +227,7 @@ export class GameRoom {
 		const fresh = initialGameState()
 		Object.assign(this.game, fresh, { seats: { ...this.game.seats } })
 		if (this.seats.w && this.seats.b) startGame(this.game, rng)
+		this.armTimers(true)
 		this.syncBoard()
 		return { ok: true }
 	}
@@ -152,7 +237,8 @@ export class GameRoom {
 	 * locked; clients connect readonly, so the server is the only writer.
 	 */
 	private syncBoard(): void {
-		const specs = buildBoardSpecs(this.game)
+		this.stacks = updateStacks(this.stacks, this.game)
+		const specs = buildBoardSpecs(this.game, this.stacks)
 		const indices = getIndices(specs.length)
 		this.storage.transaction((txn) => {
 			let pageId: string | null = null

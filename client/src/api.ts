@@ -23,6 +23,14 @@ export function sendMove(roomId: string, playerId: string, from: MoveFrom, to: M
 	return post(`/api/rooms/${roomId}/move`, { playerId, from, to })
 }
 
+export function undoMove(roomId: string, playerId: string) {
+	return post(`/api/rooms/${roomId}/undo`, { playerId })
+}
+
+export function confirmTurn(roomId: string, playerId: string) {
+	return post(`/api/rooms/${roomId}/confirm`, { playerId })
+}
+
 export function resetGame(roomId: string, playerId: string) {
 	return post(`/api/rooms/${roomId}/reset`, { playerId })
 }

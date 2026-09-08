@@ -139,11 +139,12 @@ export class BgShapeUtil extends ShapeUtil<BgShape> {
 							stroke={stroke}
 							strokeWidth={3}
 						/>
+						{/* count + label at the top; the borne-off chip pile grows from the bottom */}
 						<text
 							x={w / 2}
-							y={h / 2 - 10}
+							y={32}
 							textAnchor="middle"
-							fontSize={30}
+							fontSize={26}
 							fontWeight="bold"
 							fontFamily="sans-serif"
 							fill="#e8e0d0"
@@ -152,9 +153,9 @@ export class BgShapeUtil extends ShapeUtil<BgShape> {
 						</text>
 						<text
 							x={w / 2}
-							y={h / 2 + 18}
+							y={52}
 							textAnchor="middle"
-							fontSize={13}
+							fontSize={12}
 							fontFamily="sans-serif"
 							fill="#e8e0d0"
 						>
@@ -164,23 +165,36 @@ export class BgShapeUtil extends ShapeUtil<BgShape> {
 				)
 
 			case 'checker': {
-				const r = w / 2
+				// Round checker on the board; flattened ellipse when borne off in the tray.
+				const rx = w / 2
+				const ry = h / 2
 				return (
 					<SVGContainer>
-						<circle cx={r} cy={r} r={r - 2} fill={fill} stroke={stroke} strokeWidth={2.5} />
-						<circle
-							cx={r}
-							cy={r}
-							r={r - 9}
-							fill="none"
+						<ellipse
+							cx={rx}
+							cy={ry}
+							rx={rx - 2}
+							ry={Math.max(ry - 2, 3)}
+							fill={fill}
 							stroke={stroke}
-							strokeWidth={1.5}
-							opacity={0.6}
+							strokeWidth={2.5}
 						/>
+						{h > 30 && (
+							<ellipse
+								cx={rx}
+								cy={ry}
+								rx={rx - 9}
+								ry={ry - 9}
+								fill="none"
+								stroke={stroke}
+								strokeWidth={1.5}
+								opacity={0.6}
+							/>
+						)}
 						{label && (
 							<text
-								x={r}
-								y={r + 6}
+								x={rx}
+								y={ry + 6}
 								textAnchor="middle"
 								fontSize={20}
 								fontWeight="bold"

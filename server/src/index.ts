@@ -37,7 +37,21 @@ app.post('/api/rooms/:roomId/move', (req, res) => {
 		return
 	}
 	const room = getOrCreateRoom(req.params.roomId)
-	const result = room.move(String(playerId ?? ''), from, to)
+	const result = room.stage(String(playerId ?? ''), from, to)
+	res.status(result.ok ? 200 : 422).json(result)
+})
+
+app.post('/api/rooms/:roomId/undo', (req, res) => {
+	const { playerId } = req.body ?? {}
+	const room = getOrCreateRoom(req.params.roomId)
+	const result = room.undo(String(playerId ?? ''))
+	res.status(result.ok ? 200 : 422).json(result)
+})
+
+app.post('/api/rooms/:roomId/confirm', (req, res) => {
+	const { playerId } = req.body ?? {}
+	const room = getOrCreateRoom(req.params.roomId)
+	const result = room.confirm(String(playerId ?? ''))
 	res.status(result.ok ? 200 : 422).json(result)
 })
 

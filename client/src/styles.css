@@ -141,7 +141,8 @@ body,
 }
 .chip-b {
 	background: #35322e;
-	border: 2px solid #14120f;
+	/* light border so the black chip stays visible on the dark HUD */
+	border: 2px solid #e8e0d0;
 }
 
 /* turn clock */
@@ -153,10 +154,10 @@ body,
 	color: #ff6a4d;
 }
 
-/* Animate checker movement: board shapes have stable ids, so a move updates
-   the transform of an existing element and this transition tweens it. */
+/* Smooth checker movement: the server streams a few interpolated frames per
+   move; this short transition blends the steps into a fluid slide. */
 .tl-shape[data-shape-type='bg'] {
-	transition: transform 300ms ease;
+	transition: transform 100ms linear;
 }
 
 /* move highlights */

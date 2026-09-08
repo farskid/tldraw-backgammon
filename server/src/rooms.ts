@@ -65,6 +65,10 @@ export class GameRoom {
 	private timer: NodeJS.Timeout | null = null
 	/** invalidates stale timers whenever the clock is re-armed */
 	private timerSerial = 0
+	/** last written x/y per shape id, the starting point for move animation */
+	private lastPos = new Map<string, { x: number; y: number }>()
+	/** in-flight move animation ticker */
+	private anim: NodeJS.Timeout | null = null
 
 	constructor(readonly id: string) {
 		this.room = new TLSocketRoom<TLRecord, void>({
@@ -233,12 +237,56 @@ export class GameRoom {
 	}
 
 	/**
-	 * Re-render the whole board into the tldraw document. All board shapes are
-	 * locked; clients connect readonly, so the server is the only writer.
+	 * Re-render the whole board into the tldraw document, animating any checker
+	 * whose position changed by writing a few interpolated frames. The sync
+	 * layer drops deep-equal puts, so each animation tick only broadcasts the
+	 * moving checkers. All board shapes are locked; clients connect readonly,
+	 * so the server is the only writer.
 	 */
 	private syncBoard(): void {
 		this.stacks = updateStacks(this.stacks, this.game)
 		const specs = buildBoardSpecs(this.game, this.stacks)
+
+		if (this.anim) {
+			clearInterval(this.anim)
+			this.anim = null
+		}
+
+		// checkers that moved since the last write animate from their old spot
+		const starts = new Map<string, { x: number; y: number }>()
+		for (const s of specs) {
+			if (s.props.kind !== 'checker') continue
+			const prev = this.lastPos.get(s.id)
+			if (prev && (prev.x !== s.x || prev.y !== s.y)) starts.set(s.id, prev)
+		}
+		if (starts.size === 0) {
+			this.writeBoard(specs)
+			return
+		}
+
+		const STEPS = 6
+		const TICK_MS = 50
+		const frame = (ease: number) =>
+			specs.map((s) => {
+				const from = starts.get(s.id)
+				if (!from) return s
+				return { ...s, x: from.x + (s.x - from.x) * ease, y: from.y + (s.y - from.y) * ease }
+			})
+
+		this.writeBoard(frame(0))
+		let k = 0
+		this.anim = setInterval(() => {
+			k++
+			const t = k / STEPS
+			this.writeBoard(k >= STEPS ? specs : frame(t * (2 - t)))
+			if (k >= STEPS && this.anim) {
+				clearInterval(this.anim)
+				this.anim = null
+			}
+		}, TICK_MS)
+	}
+
+	private writeBoard(specs: ReturnType<typeof buildBoardSpecs>): void {
 		const indices = getIndices(specs.length)
 		this.storage.transaction((txn) => {
 			let pageId: string | null = null
@@ -268,6 +316,8 @@ export class GameRoom {
 				txn.set(shape.id, shape)
 			})
 		})
+		this.lastPos.clear()
+		for (const s of specs) this.lastPos.set(s.id, { x: s.x, y: s.y })
 	}
 }
 

@@ -1,5 +1,7 @@
 import {
 	BOARD_H,
+	CHECKER_COLORS,
+	CHECKER_D,
 	COLOR_NAME,
 	GameState,
 	MoveFrom,
@@ -36,6 +38,22 @@ import {
 } from './api'
 
 const STATE_SHAPE_ID = createShapeId('state')
+const DRAG_THRESHOLD = 8
+
+function parseClick(click: unknown): { from: MoveFrom | null; to: MoveTo | null } {
+	if (click === 'bar') return { from: 'bar', to: null }
+	if (click === 'off') return { from: null, to: 'off' }
+	if (typeof click === 'string' && click.startsWith('point:')) {
+		const idx = Number(click.slice(6))
+		return { from: idx, to: idx }
+	}
+	return { from: null, to: null }
+}
+
+function clickAt(editor: Editor, screen: { x: number; y: number }): unknown {
+	const page = editor.screenToPage(screen)
+	return editor.getShapeAtPoint(page, { hitInside: true, hitLocked: true })?.meta?.click
+}
 
 /** navigator.clipboard is secure-context-only; fall back to execCommand on plain http://LAN_IP. */
 function copyText(text: string) {
@@ -114,6 +132,15 @@ function GameOverlay({
 	const [error, setError] = useState<string | null>(null)
 	const [busy, setBusy] = useState(false)
 	const [autoRoll, setAutoRoll] = useState(() => localStorage.getItem('bg-auto-roll') === '1')
+	/** Ghost-drag of a locked checker: shapes stay readonly, we overlay a chip. */
+	const [drag, setDrag] = useState<null | {
+		from: MoveFrom
+		originX: number
+		originY: number
+		x: number
+		y: number
+		active: boolean
+	}>(null)
 
 	const state = useValue(
 		'game-state',
@@ -166,6 +193,68 @@ function GameOverlay({
 	const requestRollRef = useRef(requestRoll)
 	requestRollRef.current = requestRoll
 
+	const dragRef = useRef(drag)
+	dragRef.current = drag
+	const playMoveRef = useRef<(from: MoveFrom, to: MoveTo) => void>(() => {})
+
+	const playMove = useCallback(
+		(from: MoveFrom, to: MoveTo) => {
+			setBusy(true)
+			sendMove(roomId, playerId, from, to)
+				.then((res) => {
+					if (!res.ok) flashError(res.error ?? 'Move rejected.')
+				})
+				.catch(() => flashError('Network error.'))
+				.finally(() => setBusy(false))
+			setSelected(null)
+			setDrag(null)
+		},
+		[roomId, playerId, flashError]
+	)
+	playMoveRef.current = playMove
+
+	// Overlay is created after pointerdown, so it never sees that pointer.
+	// Track the rest of the gesture on window instead.
+	useEffect(() => {
+		if (!drag) return
+		const frozen = editor.getCamera()
+		const onMove = (e: PointerEvent) => {
+			const cur = dragRef.current
+			if (!cur) return
+			const cam = editor.getCamera()
+			if (cam.x !== frozen.x || cam.y !== frozen.y || cam.z !== frozen.z) {
+				editor.setCamera(frozen, { immediate: true })
+			}
+			const dist = Math.hypot(e.clientX - cur.originX, e.clientY - cur.originY)
+			setDrag({
+				...cur,
+				x: e.clientX,
+				y: e.clientY,
+				active: cur.active || dist > DRAG_THRESHOLD,
+			})
+		}
+		const onUp = (e: PointerEvent) => {
+			const cur = dragRef.current
+			if (!cur) return
+			if (cur.active) {
+				const { to } = parseClick(clickAt(editor, { x: e.clientX, y: e.clientY }))
+				if (to !== null && movesRef.current.some((m) => m.from === cur.from && m.to === to)) {
+					playMoveRef.current(cur.from, to)
+					return
+				}
+			}
+			setDrag(null)
+		}
+		window.addEventListener('pointermove', onMove)
+		window.addEventListener('pointerup', onUp)
+		window.addEventListener('pointercancel', onUp)
+		return () => {
+			window.removeEventListener('pointermove', onMove)
+			window.removeEventListener('pointerup', onUp)
+			window.removeEventListener('pointercancel', onUp)
+		}
+	}, [!!drag, editor])
+
 	useEffect(() => {
 		if (!autoRoll || !myTurn || state?.phase !== 'rolling') return
 		requestRollRef.current()
@@ -179,47 +268,26 @@ function GameOverlay({
 			const currentMoves = movesRef.current
 			if (currentMoves.length === 0) return
 
-			const point = editor.inputs.currentPagePoint
-			const shape = editor.getShapeAtPoint(point, { hitInside: true, hitLocked: true })
-			const click = shape?.meta?.click
-			if (typeof click !== 'string') {
-				setSelected(null)
-				return
-			}
-
-			let clickedFrom: MoveFrom | null = null
-			let clickedTo: MoveTo | null = null
-			if (click === 'bar') {
-				clickedFrom = 'bar'
-			} else if (click === 'off') {
-				clickedTo = 'off'
-			} else if (click.startsWith('point:')) {
-				const idx = Number(click.slice(6))
-				clickedFrom = idx
-				clickedTo = idx
-			}
+			const { from: clickedFrom, to: clickedTo } = parseClick(
+				clickAt(editor, editor.inputs.currentScreenPoint)
+			)
 
 			const from = selectedRef.current
-			// Second click: try to complete a move from the selected source
+			// Tap-tap: complete a move from the already-selected source
 			if (
 				from !== null &&
 				clickedTo !== null &&
 				currentMoves.some((m) => m.from === from && m.to === clickedTo)
 			) {
-				setBusy(true)
-				sendMove(roomId, playerId, from, clickedTo)
-					.then((res) => {
-						if (!res.ok) flashError(res.error ?? 'Move rejected.')
-					})
-					.catch(() => flashError('Network error.'))
-					.finally(() => setBusy(false))
-				setSelected(null)
+				playMove(from, clickedTo)
 				return
 			}
 
-			// First click (or re-click): select a source that has legal moves
+			// Grab a legal source — tap selects it; drag (overlay) drops it on a column
 			if (clickedFrom !== null && currentMoves.some((m) => m.from === clickedFrom)) {
-				setSelected((prev) => (prev === clickedFrom ? null : clickedFrom))
+				const { x, y } = editor.inputs.currentScreenPoint
+				setSelected(clickedFrom)
+				setDrag({ from: clickedFrom, originX: x, originY: y, x, y, active: false })
 			} else {
 				setSelected(null)
 			}
@@ -228,7 +296,7 @@ function GameOverlay({
 		return () => {
 			editor.off('event', onEvent)
 		}
-	}, [editor, roomId, playerId, flashError])
+	}, [editor, playMove])
 
 	if (!state) return null
 
@@ -237,18 +305,21 @@ function GameOverlay({
 		y: (p.y + camera.y) * camera.z,
 	})
 
+	const highlightFrom = drag?.from ?? selected
 	const sources = [...new Set(moves.map((m) => m.from))]
 	const targets =
-		selected !== null
-			? [...new Set(moves.filter((m) => m.from === selected).map((m) => m.to))]
+		highlightFrom !== null
+			? [...new Set(moves.filter((m) => m.from === highlightFrom).map((m) => m.to))]
 			: []
 	const seatColor = seat === 'w' || seat === 'b' ? seat : null
+	const chip = seatColor ? CHECKER_COLORS[seatColor] : null
+	const ghostSize = CHECKER_D * camera.z
 
 	return (
 		<>
 			{/* move highlights */}
 			<svg className="highlight-layer">
-				{selected === null &&
+				{highlightFrom === null &&
 					seatColor &&
 					sources.map((from) => {
 						const c = toScreen(moveSourceCenter(from, seatColor))
@@ -262,10 +333,10 @@ function GameOverlay({
 							/>
 						)
 					})}
-				{selected !== null && seatColor && (
+				{highlightFrom !== null && seatColor && (
 					<circle
-						cx={toScreen(moveSourceCenter(selected, seatColor)).x}
-						cy={toScreen(moveSourceCenter(selected, seatColor)).y}
+						cx={toScreen(moveSourceCenter(highlightFrom, seatColor)).x}
+						cy={toScreen(moveSourceCenter(highlightFrom, seatColor)).y}
 						r={32 * camera.z}
 						className="ring ring-selected"
 					/>
@@ -284,6 +355,24 @@ function GameOverlay({
 						)
 					})}
 			</svg>
+
+			{drag && (
+				<div className="drag-layer">
+					{drag.active && chip && (
+						<div
+							className="drag-ghost"
+							style={{
+								left: drag.x - ghostSize / 2,
+								top: drag.y - ghostSize / 2,
+								width: ghostSize,
+								height: ghostSize,
+								background: chip.fill,
+								borderColor: chip.stroke,
+							}}
+						/>
+					)}
+				</div>
+			)}
 
 			{/* HUD */}
 			<div className="hud">
@@ -383,8 +472,8 @@ function GameOverlay({
 							{moves.length === 0
 								? 'No moves left — press OK to end your turn.'
 								: selected === null
-									? 'Click one of your highlighted checkers…'
-									: 'Now click a highlighted destination.'}
+									? 'Drag a highlighted checker onto a point, or tap then tap.'
+									: 'Drop or tap a highlighted destination.'}
 						</div>
 					</>
 				)}

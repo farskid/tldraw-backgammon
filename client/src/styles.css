@@ -197,6 +197,22 @@ body,
 .ring-target {
 	stroke: #6ee76e;
 }
+
+/* Ghost-drag overlay: captures the rest of the gesture so tldraw doesn't pan. */
+.drag-layer {
+	position: absolute;
+	inset: 0;
+	z-index: 260;
+	pointer-events: none;
+	cursor: grabbing;
+}
+.drag-ghost {
+	position: absolute;
+	border-radius: 50%;
+	border: 2.5px solid;
+	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+	pointer-events: none;
+}
 @keyframes spin-dash {
 	to {
 		stroke-dashoffset: -14;

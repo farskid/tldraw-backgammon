@@ -17,7 +17,7 @@ Then:
 2. Copy the URL (there's a **Copy link** button in the HUD) and open it in a **second tab**. The first tab is White, the second is Black — the game starts automatically with an opening roll. Your seat is shown as a colored checker chip in the HUD.
 3. Play a turn — you have **30 seconds** for the whole turn (the HUD shows the countdown):
    - Click **🎲 Roll dice**, or check **Auto roll** to have the client roll for you as soon as it's your turn.
-   - Click one of your highlighted (yellow-ringed) checkers, then a green-ringed destination. Moves are **staged**: they appear on both boards immediately (animated), but stay provisional.
+   - Drag a highlighted (yellow-ringed) checker onto a green-ringed point (or tap the checker, then the destination). Moves are **staged**: they appear on both boards immediately (animated), but stay provisional.
    - **↩ Undo** reverts the last staged move; **✓ OK** commits the turn and passes it (OK stays disabled while you still have playable dice).
    - If the clock runs out, staged moves are discarded and the turn passes. If a roll leaves you with no legal moves, the dice stay visible for a couple of seconds with a "No legal moves" notice, then the turn passes automatically.
 4. Open the same URL in a **third tab** to see the spectator mode (seats are capped at 2).

@@ -113,6 +113,7 @@ function GameOverlay({
 	const [selected, setSelected] = useState<MoveFrom | null>(null)
 	const [error, setError] = useState<string | null>(null)
 	const [busy, setBusy] = useState(false)
+	const [autoRoll, setAutoRoll] = useState(() => localStorage.getItem('bg-auto-roll') === '1')
 
 	const state = useValue(
 		'game-state',
@@ -130,6 +131,17 @@ function GameOverlay({
 		setError(message)
 		window.setTimeout(() => setError(null), 2500)
 	}, [])
+
+	const requestRoll = useCallback(() => {
+		if (busyRef.current) return
+		setBusy(true)
+		rollDice(roomId, playerId)
+			.then((res) => {
+				if (!res.ok) flashError(res.error ?? 'Roll rejected.')
+			})
+			.catch(() => flashError('Network error.'))
+			.finally(() => setBusy(false))
+	}, [roomId, playerId, flashError])
 
 	const myTurn = !!state && seat !== null && seat !== 'spectator' && state.turn === seat
 	const moves = useMemo(
@@ -151,6 +163,13 @@ function GameOverlay({
 	selectedRef.current = selected
 	const busyRef = useRef(busy)
 	busyRef.current = busy
+	const requestRollRef = useRef(requestRoll)
+	requestRollRef.current = requestRoll
+
+	useEffect(() => {
+		if (!autoRoll || !myTurn || state?.phase !== 'rolling') return
+		requestRollRef.current()
+	}, [autoRoll, myTurn, state?.phase])
 
 	useEffect(() => {
 		const onEvent = (info: TLEventInfo) => {
@@ -306,21 +325,23 @@ function GameOverlay({
 					Bar — White: {state.bar.w}, Black: {state.bar.b} · Off — White: {state.off.w}, Black:{' '}
 					{state.off.b}
 				</div>
+				{seat !== 'spectator' && seat !== null && (
+					<label className="hud-check">
+						<input
+							type="checkbox"
+							checked={autoRoll}
+							onChange={(e) => {
+								const on = e.target.checked
+								setAutoRoll(on)
+								localStorage.setItem('bg-auto-roll', on ? '1' : '0')
+							}}
+						/>
+						Auto roll
+					</label>
+				)}
 				{myTurn && state.phase === 'rolling' && (
-					<button
-						className="hud-btn"
-						disabled={busy}
-						onClick={() => {
-							setBusy(true)
-							rollDice(roomId, playerId)
-								.then((res) => {
-									if (!res.ok) flashError(res.error ?? 'Roll rejected.')
-								})
-								.catch(() => flashError('Network error.'))
-								.finally(() => setBusy(false))
-						}}
-					>
-						🎲 Roll dice
+					<button className="hud-btn" disabled={busy} onClick={requestRoll}>
+						{autoRoll && busy ? 'Auto rolling…' : '🎲 Roll dice'}
 					</button>
 				)}
 				{myTurn && state.phase === 'moving' && (

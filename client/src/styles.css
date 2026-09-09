@@ -95,6 +95,19 @@ body,
 	opacity: 0.8;
 	font-style: italic;
 }
+.hud-check {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+	cursor: pointer;
+	user-select: none;
+}
+.hud-check input {
+	width: 16px;
+	height: 16px;
+	accent-color: #c9a36a;
+}
 .hud-btn {
 	margin-top: 4px;
 	padding: 8px 14px;

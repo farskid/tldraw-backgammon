@@ -2,6 +2,12 @@
 
 A proof-of-concept 2-player backgammon game that (ab)uses [tldraw sync](https://tldraw.dev/docs/sync) multiplayer as the shared board. The server holds the authoritative game state and *renders the board as tldraw shapes*; clients connect to the sync room readonly and propose moves over a small HTTP API.
 
+## Live demo
+
+**https://tldraw-backgammon.onrender.com** — click **Create room**, then open the room URL in a second tab to play both seats. (Free-tier host: the first request after idle can take ~a minute to cold-start, and a restart resets in-memory rooms.)
+
+This is a non-commercial hobby POC. A [tldraw hobby license](https://tldraw.dev/get-a-license/hobby) `licenseKey` will be added once approved; until then the production build may log tldraw license warnings in the console — expected and acceptable for now. To bake in the key, set the `VITE_TLDRAW_LICENSE_KEY` environment variable at build time (see [Deployment](#deployment)).
+
 ## Quick start
 
 Requires Node 20.11+ and npm.
@@ -34,6 +40,14 @@ npm start -w server     # serves the built client + sync + API on http://localho
 ### Playing from a phone on your LAN
 
 Run the single-process mode above and open `http://<your-LAN-IP>:5858/?room=myroom` on the phone. Plain HTTP over a LAN IP is not a "secure context", so the client avoids secure-context-only browser APIs (`crypto.randomUUID`, `navigator.clipboard`) and falls back to `crypto.getRandomValues` / `execCommand` — no HTTPS needed. An HTTPS tunnel (e.g. ngrok, cloudflared) still works if you prefer one.
+
+## Deployment
+
+The app is one long-running Node process (WebSocket sync + HTTP API + static client), so it needs a real server, not static hosting. It binds `process.env.PORT` (default 5858).
+
+- **Render** (current live demo): `render.yaml` is a blueprint for a free web service — build `npm ci && npm run build`, start `npm start -w server`. Redeploys happen automatically on push to `main`; or use "Manual deploy" in the Render dashboard.
+- **Fly.io / any Docker host**: `Dockerfile` + `fly.toml` are included (`fly launch --copy-config --no-deploy && fly deploy`).
+- **License key**: set `VITE_TLDRAW_LICENSE_KEY` in the host's environment (it's a *build-time* variable — trigger a rebuild after setting it) to pass a tldraw license key to `<Tldraw licenseKey={...} />`.
 
 ### Simulate a full game (rules smoke test)
 

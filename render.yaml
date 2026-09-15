@@ -1,0 +1,16 @@
+# Render blueprint: single free web service running the Node server, which
+# serves the built client, the tldraw sync WebSocket, and the move API on one port.
+services:
+  - type: web
+    name: tldraw-backgammon
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start -w server
+    healthCheckPath: /
+    envVars:
+      # Optional tldraw license key (baked into the client at build time).
+      # Set it in the Render dashboard once the hobby license is approved,
+      # then trigger a redeploy. Leave unset until then.
+      - key: VITE_TLDRAW_LICENSE_KEY
+        sync: false

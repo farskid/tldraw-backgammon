@@ -40,6 +40,10 @@ import {
 const STATE_SHAPE_ID = createShapeId('state')
 const DRAG_THRESHOLD = 8
 
+// Optional tldraw license key (e.g. a hobby license), baked in at build time.
+// When unset, tldraw runs unlicensed and may log console warnings in production.
+const TLDRAW_LICENSE_KEY = import.meta.env.VITE_TLDRAW_LICENSE_KEY as string | undefined
+
 function parseClick(click: unknown): { from: MoveFrom | null; to: MoveTo | null } {
 	if (click === 'bar') return { from: 'bar', to: null }
 	if (click === 'off') return { from: null, to: 'off' }
@@ -111,7 +115,13 @@ export function Game({ roomId }: { roomId: string }) {
 
 	return (
 		<div className="game-root">
-			<Tldraw store={store} shapeUtils={[BgShapeUtil]} hideUi onMount={onMount}>
+			<Tldraw
+				store={store}
+				shapeUtils={[BgShapeUtil]}
+				hideUi
+				onMount={onMount}
+				licenseKey={TLDRAW_LICENSE_KEY || undefined}
+			>
 				<GameOverlay roomId={roomId} playerId={playerId} seat={seat} />
 			</Tldraw>
 		</div>

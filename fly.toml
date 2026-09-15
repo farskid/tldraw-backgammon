@@ -2,6 +2,12 @@
 #   fly launch --copy-config --no-deploy && fly deploy
 # To bake in a tldraw license key:
 #   fly deploy --build-arg VITE_TLDRAW_LICENSE_KEY=...
+#
+# One-time setup for durable usage stats (see "Usage stats" in the README):
+#   fly volumes create stats_data --region arn --size 1
+#   fly secrets set STATS_TOKEN=<pick-a-secret>
+# The [mounts] section below attaches that volume at /data; the SQLite schema
+# is created automatically on boot — no migrations or DB admin ever needed.
 app = "tldraw-backgammon"
 primary_region = "arn"
 
@@ -9,6 +15,11 @@ primary_region = "arn"
 
 [env]
   PORT = "5858"
+  STATS_DB_PATH = "/data/stats.sqlite"
+
+[mounts]
+  source = "stats_data"
+  destination = "/data"
 
 [http_service]
   internal_port = 5858

@@ -49,6 +49,33 @@ The app is one long-running Node process (WebSocket sync + HTTP API + static cli
 - **Fly.io / any Docker host**: `Dockerfile` + `fly.toml` are included (`fly launch --copy-config --no-deploy && fly deploy`).
 - **License key**: set `VITE_TLDRAW_LICENSE_KEY` in the host's environment (it's a *build-time* variable — trigger a rebuild after setting it) to pass a tldraw license key to `<Tldraw licenseKey={...} />`.
 
+## Usage stats
+
+The server records usage events (`room_created`, `player_joined`, `spectator_joined`, `game_started`, `game_finished`) to a SQLite file so they survive restarts — rooms themselves stay in-memory. It uses Node 22's built-in `node:sqlite`: **no extra dependency, no native build, and the schema is auto-created on boot** (`CREATE TABLE IF NOT EXISTS`), so there is nothing to migrate or administer, ever.
+
+| Env var | Meaning |
+| --- | --- |
+| `STATS_TOKEN` | Enables `GET /api/stats`. **Unset = the endpoint returns 404** (never public). |
+| `STATS_DB_PATH` | SQLite file location. Default `./data/stats.sqlite` (created automatically); `fly.toml` sets `/data/stats.sqlite` on the mounted volume. |
+
+Query it with the token as a Bearer header or `?token=`:
+
+```bash
+curl -H "Authorization: Bearer $STATS_TOKEN" https://<your-app>/api/stats
+# or: curl "https://<your-app>/api/stats?token=$STATS_TOKEN"
+```
+
+The response has `live` (current rooms by phase, connected sockets, seated players, spectators) and `durable` (all-time totals from SQLite: rooms created, games started/finished, player joins + unique players, per-day counts for the last 14 days, and the last 20 raw events).
+
+**Fly.io — one-time setup** (the only ops step; after this the stats persist across deploys, restarts, and machine stops):
+
+```bash
+fly volumes create stats_data --region arn --size 1
+fly secrets set STATS_TOKEN=<pick-a-secret>
+```
+
+`fly.toml` already mounts the volume at `/data` and points `STATS_DB_PATH` there. Note: a Fly volume attaches to a single machine, which matches the single-machine in-memory-rooms design. On Render's free tier there is no persistent disk, so stats reset with each deploy there (the endpoint still works if you set `STATS_TOKEN`).
+
 ### Simulate a full game (rules smoke test)
 
 With the server running:
@@ -105,7 +132,7 @@ client/   Vite + React: <Tldraw> with useSync, custom ShapeUtil, HUD overlay
 
 ### Notes / known limitations
 
-- Rooms live in server memory only; restarting the server resets all games.
+- Rooms live in server memory only; restarting the server resets all games. (Usage *stats* do persist — see [Usage stats](#usage-stats).)
 - No auth: seats are first-come-first-served by generated player id.
 - `GET /api/rooms/:id/state` exposes the game state for debugging.
 

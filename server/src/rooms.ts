@@ -5,6 +5,7 @@ import {
 	GameState,
 	MoveFrom,
 	MoveTo,
+	Phase,
 	bgShapeProps,
 	buildBoardSpecs,
 	confirmTurn,
@@ -27,6 +28,7 @@ import {
 } from '@tldraw/tlschema'
 import { getIndices } from '@tldraw/utils'
 import crypto from 'node:crypto'
+import { recordEvent } from './stats'
 
 export type Seat = Color | 'spectator'
 
@@ -120,8 +122,10 @@ export class GameRoom {
 			if (this.seats[color] === null) {
 				this.seats[color] = playerId
 				this.game.seats[color] = true
+				recordEvent('player_joined', { roomId: this.id, playerId, detail: color })
 				if (this.game.phase === 'waiting' && this.seats.w && this.seats.b) {
 					startGame(this.game, rng)
+					recordEvent('game_started', { roomId: this.id })
 					this.armTimers(true)
 				} else if (this.game.phase === 'waiting') {
 					this.game.message = 'Waiting for a second player to join…'
@@ -130,6 +134,9 @@ export class GameRoom {
 				return color
 			}
 		}
+		// Note: a spectator refreshing the page joins again, so this over-counts
+		// reloads — fine for a rough signal.
+		recordEvent('spectator_joined', { roomId: this.id, playerId })
 		return 'spectator'
 	}
 
@@ -217,6 +224,10 @@ export class GameRoom {
 		if (!check.ok) return check
 		const result = confirmTurn(this.game)
 		if (result.ok) {
+			// confirmTurn is the only transition into 'gameover' (bear off the 15th)
+			if (this.game.phase === 'gameover') {
+				recordEvent('game_finished', { roomId: this.id, detail: this.game.winner ?? undefined })
+			}
 			this.armTimers(true)
 			this.syncBoard()
 		}
@@ -230,7 +241,10 @@ export class GameRoom {
 		if (this.game.phase !== 'gameover') return { ok: false, error: 'Game is still in progress.' }
 		const fresh = initialGameState()
 		Object.assign(this.game, fresh, { seats: { ...this.game.seats } })
-		if (this.seats.w && this.seats.b) startGame(this.game, rng)
+		if (this.seats.w && this.seats.b) {
+			startGame(this.game, rng)
+			recordEvent('game_started', { roomId: this.id, detail: 'rematch' })
+		}
 		this.armTimers(true)
 		this.syncBoard()
 		return { ok: true }
@@ -319,6 +333,21 @@ export class GameRoom {
 		this.lastPos.clear()
 		for (const s of specs) this.lastPos.set(s.id, { x: s.x, y: s.y })
 	}
+
+	/** Point-in-time occupancy for /api/stats. */
+	liveInfo(): { phase: Phase; sockets: number; seatedConnected: number; spectators: number } {
+		const connected = new Set(this.sessions.values())
+		let seatedConnected = 0
+		for (const color of ['w', 'b'] as Color[]) {
+			const pid = this.seats[color]
+			if (pid && connected.has(pid)) seatedConnected++
+		}
+		let spectators = 0
+		for (const pid of connected) {
+			if (pid !== this.seats.w && pid !== this.seats.b) spectators++
+		}
+		return { phase: this.game.phase, sockets: this.sessions.size, seatedConnected, spectators }
+	}
 }
 
 const rooms = new Map<string, GameRoom>()
@@ -330,6 +359,40 @@ export function getOrCreateRoom(roomId: string): GameRoom {
 		console.log(`creating room ${sanitized}`)
 		room = new GameRoom(sanitized)
 		rooms.set(sanitized, room)
+		recordEvent('room_created', { roomId: sanitized })
 	}
 	return room
+}
+
+export interface LiveStats {
+	rooms: number
+	rooms_waiting: number
+	rooms_playing: number
+	rooms_finished: number
+	connected_sockets: number
+	seated_players: number
+	spectators: number
+}
+
+/** Snapshot of the in-memory rooms (lost on restart — durable stats live in SQLite). */
+export function getLiveStats(): LiveStats {
+	const stats: LiveStats = {
+		rooms: rooms.size,
+		rooms_waiting: 0,
+		rooms_playing: 0,
+		rooms_finished: 0,
+		connected_sockets: 0,
+		seated_players: 0,
+		spectators: 0,
+	}
+	for (const room of rooms.values()) {
+		const info = room.liveInfo()
+		if (info.phase === 'waiting') stats.rooms_waiting++
+		else if (info.phase === 'gameover') stats.rooms_finished++
+		else stats.rooms_playing++
+		stats.connected_sockets += info.sockets
+		stats.seated_players += info.seatedConnected
+		stats.spectators += info.spectators
+	}
+	return stats
 }

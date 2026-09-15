@@ -1,9 +1,11 @@
 import express from 'express'
+import crypto from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import { WebSocketServer } from 'ws'
-import { getOrCreateRoom } from './rooms'
+import { getLiveStats, getOrCreateRoom } from './rooms'
+import { getDurableStats } from './stats'
 
 const PORT = Number(process.env.PORT ?? 5858)
 
@@ -65,6 +67,28 @@ app.post('/api/rooms/:roomId/reset', (req, res) => {
 // Debug: inspect the authoritative game state
 app.get('/api/rooms/:roomId/state', (req, res) => {
 	res.json(getOrCreateRoom(req.params.roomId).game)
+})
+
+// Usage stats, gated by STATS_TOKEN (Bearer header or ?token=). With no token
+// configured the route pretends not to exist rather than being left public.
+app.get('/api/stats', (req, res) => {
+	const expected = process.env.STATS_TOKEN
+	if (!expected) {
+		res.status(404).json({ ok: false, error: 'not found' })
+		return
+	}
+	const header = req.headers.authorization
+	const supplied =
+		(header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined) ??
+		(typeof req.query.token === 'string' ? req.query.token : undefined) ??
+		''
+	const a = crypto.createHash('sha256').update(supplied).digest()
+	const b = crypto.createHash('sha256').update(expected).digest()
+	if (!crypto.timingSafeEqual(a, b)) {
+		res.status(401).json({ ok: false, error: 'unauthorized' })
+		return
+	}
+	res.json({ ok: true, live: getLiveStats(), durable: getDurableStats() })
 })
 
 // If the client has been built, serve it too (single-process "production" mode).
